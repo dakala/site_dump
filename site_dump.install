@@ -1,0 +1,18 @@
+<?php
+
+/*
+ * To change this template, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+
+/**
+ * Implements hook_install().
+ */
+function site_dump_install() {
+  $dirs = array('export', 'import', 'import/images', 'import/yml', 'import/csv');
+  foreach ($dirs as $directory) {
+    $directory = file_default_scheme() . '://site_dump/' . $directory;
+    file_prepare_directory($directory, FILE_CREATE_DIRECTORY | FILE_MODIFY_PERMISSIONS);
+  }
+}

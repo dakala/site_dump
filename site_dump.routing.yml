@@ -1,0 +1,22 @@
+site_dump.import:
+  path: '/admin/config/development/site_dump'
+  defaults:
+    _form: '\Drupal\site_dump\Form\SiteDumpImportForm'
+    _title: 'Import'
+  requirements:
+    _permission: 'import configuration'
+
+site_dump.export:
+  path: '/admin/config/development/site_dump/export'
+  defaults:
+    _form: '\Drupal\site_dump\Form\SiteDumpExportForm'
+    _title: 'Export'
+  requirements:
+    _permission: 'export configuration'
+
+site_dump.export_download:
+  path: '/admin/config/development/site_dump/full/export-download/{location}'
+  defaults:
+    _controller: '\Drupal\site_dump\Controller\ConfigController::downloadExport'
+  requirements:
+    _permission: 'export configuration'

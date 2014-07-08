@@ -1,0 +1,6 @@
+name: Site Dump
+type: module
+description: 'Allows you export a site and import it to another.'
+package: Other
+version: VERSION
+core: 8.x

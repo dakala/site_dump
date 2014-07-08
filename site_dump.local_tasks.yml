@@ -1,0 +1,9 @@
+site_dump.import:
+  title: 'Import content'
+  route_name: site_dump.import
+  base_route: site_dump.import
+
+site_dump.export:
+  title: 'Export content'
+  route_name: site_dump.export
+  base_route: site_dump.import

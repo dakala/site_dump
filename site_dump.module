@@ -1,0 +1,1091 @@
+<?php
+
+/*
+ * @file
+ *
+ * Export content types, users and taxonomy to YAML files and import them to another site.
+ *
+ */
+
+use Symfony\Component\Yaml\Yaml;
+use Drupal\node\Entity\Node;
+use Drupal\taxonomy\Entity\Term;
+use Drupal\taxonomy\Entity\Vocabulary;
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\user\Entity\User;
+use Drupal\Core\Routing\RouteMatchInterface;
+
+
+/**
+ * Implements hook_help().
+ */
+function site_dump_help($route_name, RouteMatchInterface $route_match) {
+  switch ($route_name) {
+    case 'admin.help.site_dump':
+      $output = '';
+      $output .= '<h3>' . t('About') . '</h3>';
+      $output .= '<p>' . t('The Site Dump module allows administrators to export and import site components.') . '</p>';
+      $output .= '<h3>' . t('Uses') . '</h3>';
+      $output .= '<dl>';
+      $output .= '<dt>' . t('Site export') . '</dt>';
+      $output .= '<dd>' . t('Administrators can select ...') . '</dd>';
+      $output .= '</dl>';
+      return $output;
+
+    case 'site_dump.import':
+      return '<p>' . t('Export and import ...') . '</p>';
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+function site_dump_page_build(&$page) {
+  $path = drupal_get_path('module', 'site_dump');
+  // Add JavaScript/CSS assets to all pages.
+  // @see drupal_process_attached()
+  $page['#attached']['css'][$path . '/css/pedu.css'] = array('every_page' => TRUE);
+
+  // Add a special CSS file to a certain page only.
+  if (drupal_is_front_page()) {
+//    $page['#attached']['css'][] = $path . '/foo.front.css';
+  }
+}
+
+
+
+/**
+ * Implements hook_permission().
+ */
+function site_dump_permission() {
+  return array('dump site components' => array('title' => t('Import/Export site components.'),),);
+}
+
+/**
+ * @return mixed
+ */
+function site_dump_page() {
+  //site_dump_convert_csv_to_yaml();
+  $components = site_dump_get_components();
+  $form['export'] = array(
+    '#type' => 'details',
+    '#title' => t('Export'),
+  );
+
+  $form['export']['export_components'] = array(
+    '#type' => 'checkboxes',
+    '#title' => t('Exportables'),
+    '#options' => $components,
+    '#description' => t('Selected items will be exported into files named in a specific format.'),
+  );
+
+  $form['export']['export-submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Export all selected'),
+    '#submit' => array('site_dump_export_components_submit'),
+  );
+
+  $form['import'] = array(
+    '#type' => 'details',
+    '#title' => t('Import'),
+  );
+
+  $form['import']['import_components'] = array(
+    '#type' => 'checkboxes',
+    '#title' => t('Importables'),
+    '#options' => site_dump_discover_importables(),
+    '#description' => t('Selected items will be imported into this site. Best in this order: taxonomy > content_types > nodes'),
+  );
+
+  $form['import']['import-submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Import all selected'),
+    '#submit' => array('site_dump_import_components_submit'),
+  );
+
+  return $form;
+}
+
+function site_dump_export_components_submit($form_id, &$form_state) {
+  $components = $form_state['values']['export_components'];
+  if (count($components)) {
+    foreach ($components as $component) {
+      $frags = explode('-', $component);
+      if ($component) {
+        $export = site_dump_export_components($frags[0], (isset($frags[1]) ? $frags[1] : ''), (isset($frags[1]) ? 0 : ''));
+      }
+    }
+  }
+  drupal_set_message(t('Export of selected component(s) done.'));
+}
+
+// admin/config/development/site_dump/export/content_types/ARTICLE
+// admin/config/development/site_dump/export/taxonomy/TAGS
+// admin/config/development/site_dump/export/<ENTITY_TYPE>/<BUNDLE>/<NID>
+function site_dump_export_components($component, $type = '', $id = '') {
+  if (drupal_strlen($component) && drupal_strlen($type) && is_numeric($id)) {
+    $exports = site_dump_export_entity($component, $type, $id);
+  }
+  else {
+    $func = sprintf("site_dump_export_%s", $component);
+    $exports = $func($type);
+  }
+
+  if (count($exports)) {
+    foreach ($exports as $key => $export) {
+      $root = sprintf("site_dump.%s.%s%s", $component, $key, (($id > 0) ? sprintf('.%d', $id) : ''));
+      $config = Drupal::config($root);
+      foreach ($export as $key => $value) {
+        $config->set($key, $value);
+      }
+      $config->save();
+    }
+  }
+
+  if (strpos($_SERVER["HTTP_REFERER"], 'site_dump') === FALSE) {
+    drupal_set_message(t('Export of selected component(s) done.'));
+    drupal_goto($_SERVER["HTTP_REFERER"]);
+  }
+}
+
+// TODO: core CMI
+function site_dump_discover_importables() {
+  $importables = array();
+  $path = DRUPAL_ROOT . '/sites/default/files/site_dump/import';
+  if ($handle = opendir($path)) {
+    while (FALSE !== ($file = readdir($handle))) {
+      if ($file != "." && $file != "..") {
+        $frags = explode('.', $file);
+        if (array_pop($frags) == 'yml') {
+          $key = sprintf('%s--%s%s', $frags[1], $frags[2], (isset($frags[3]) ? sprintf('--%s', $frags[3]) : ''));
+          $importables[$key] = sprintf("(%s%s) %s", $frags[1], (isset($frags[3]) ? sprintf('-%s', $frags[3]) : ''), $frags[2]);
+        }
+      }
+    }
+    closedir($handle);
+  }
+  return $importables;
+}
+
+function site_dump_import_components_submit($form_id, &$form_state) {
+  $components = $form_state['values']['import_components'];
+  if (count($components)) {
+    foreach ($components as $component) {
+      if ($component) {
+        $frags = explode('--', $component);
+        if (!in_array($frags[0], array('taxonomy', 'users'))) {
+          $import = site_dump_import_entity($frags[0], $frags[1]);
+        }
+        else {
+          $func = sprintf("site_dump_import_%s", $frags[0]);
+          $import = $func($frags[1]);
+        }
+      }
+    }
+  }
+  drupal_set_message(t('Import of selected component(s) done.'));
+  drupal_goto($_SERVER["HTTP_REFERER"]);
+}
+
+function site_dump_export_content_types($type = '') {
+  $content_types = node_type_get_types();
+  $bundles = (drupal_strlen($type)) ? array($type => $content_types[$type]) : $content_types;
+  $exports = array();
+  foreach ($bundles as $bundle => $content_type) {
+    $entity_type = $content_type->module;
+    $exports[$bundle]['content_type'] = (array) $content_type;
+//    $field_infos = field_read_fields(array('entity_type' => $entity_type, 'bundle' => $bundle));
+    $field_infos = entity_load_multiple_by_properties('field_config', array(
+      'entity_type' => $entity_type,
+      'bundle' => $bundle
+    ));
+    foreach ($field_infos as $field_name => $field_info) {
+      $field_identifier = sprintf("%s-%s-%s", $entity_type, $bundle, $field_name);
+      unset($field_info['id']);
+      unset($field_info['bundles']);
+      // TODO:
+      unset($field_info['columns']);
+      // Only remove the 'storage' declaration if the field is using the default
+      // storage type.
+      if ($field_info['storage']['type'] == variable_get('field_storage_default', 'field_sql_storage')) {
+        unset($field_info['storage']);
+      }
+      // field instance
+      $instance_info = field_read_instance($entity_type, $field_name, $bundle);
+      unset($instance_info['id']);
+      unset($instance_info['field_id']);
+
+      $field_definition_array = array(
+        'field_config' => $field_info,
+        'field_instance' => $instance_info,
+      );
+
+      _site_dump_export_sort($field_definition_array);
+
+      $exports[$bundle]['fields'][$field_identifier] = $field_definition_array;
+    }
+  }
+  return $exports;
+}
+
+function site_dump_export_users($type = '') {
+  $exports = array();
+  $user_roles = user_roles(TRUE);
+  $role = (drupal_strlen($type)) ? $user_roles[$type] : $user_roles['authenticated'];
+  $exports[$role->id]['role'] = get_object_vars($role);
+  if (drupal_strlen($type)) {
+    $query = db_select('users_roles', 'ur')->fields('ur', array('uid'))
+      ->condition('ur.rid', $role->id);
+  }
+  else {
+    $query = db_select('users', 'u')->fields('u', array('uid'))
+      ->condition('u.uid', array(0, 1), 'NOT IN');
+  }
+  $results = $query->execute();
+  $uids = array();
+  if (count($results)) {
+    foreach ($results as $result) {
+      $uids[] = $result->uid;
+    }
+  }
+  if (count($uids)) {
+    $users = user_load_multiple(array_unique($uids));
+    foreach ($users as $user) {
+      $exports[$role->id]['users'][$user->name] = get_object_vars($user);
+    }
+  }
+
+  var_dump($exports);
+  die('xxxxx:');
+
+  return $exports;
+}
+
+/**
+ * Create array of all vocabularies and terms to be exported.
+ *
+ * Curently (10-12-2013) only supports a single level of hierarchy e.g.
+ *  Schools
+ *    - Nursery
+ *    - Primary
+ *    - Secondary
+ *    - College
+ *    - University
+ *
+ * No support, yet, for things like:
+ *  News
+ *    - Sports
+ *      - Football
+ *        - Premier League
+ *          - Arsenal
+ *          - Liverpool
+ *
+ * @param string $type
+ *  The vocabulary machine name
+ * @return array
+ *  Array of vocabulary and all terms with hierachy details.
+ *  array(
+ *    'vocabulary' => array(
+ *      'name'  => 'Vocab 1',
+ *      'uuid'  => 'abc-123',
+ *    ),
+ *    'terms' => array(
+ *      'term-123'  => array(
+ *        'name'  => 'Term 1',
+ *        'uuid' => 'term-123',
+ *        'parents' => array(),
+ *      )
+ *    ),
+ * );
+ *
+ */
+function site_dump_export_taxonomy($type = '') {
+  $exports = array();
+  //$vocabs = taxonomy_vocabulary_load_multiple();
+  $vocabs = entity_load_multiple('taxonomy_vocabulary');
+  $vocabularies = (drupal_strlen($type)) ? array($type => $vocabs[$type]) : $vocabs;
+  foreach ($vocabularies as $vocabulary) {
+    // Vocabulary should already be part of core config.
+    $exports[$vocabulary->vid]['vocabulary'] = get_object_vars($vocabulary);
+    $terms = taxonomy_get_tree($vocabulary->vid, 0, NULL);
+    foreach ($terms as $term) {
+      if (count($term->parents)) {
+        site_dump_get_term_parents($terms, $term);
+      }
+      // tid is an integer so probably not very helpful to keep it
+      $exported_term = get_object_vars($term);
+      unset($exported_term['tid']);
+      $exports[$vocabulary->vid]['terms'][$term->uuid] = $exported_term;
+    }
+  }
+  return $exports;
+}
+
+
+function site_dump_export_entity($entity_type, $bundle, $id = 0) {
+  $exports = array();
+  if ($id > 0) {
+    $entities[0] = entity_load($entity_type, $id);
+  }
+  else {
+    $entities = entity_load_multiple_by_properties($entity_type, array('type' => $bundle));
+  }
+
+  if (count($entities)) {
+//    $field_info = field_read_fields(array(
+//      'entity_type' => $entity_type,
+//      'bundle' => $bundle
+//    ));
+    $field_info = entity_load_multiple_by_properties('field_config', array(
+      'entity_type' => $entity_type,
+      'bundle' => $bundle
+    ));
+
+    $entity_fields = array_keys($field_info);
+    $fields = array_merge(site_dump_get_base_fields(), $entity_fields);
+    foreach ($entities as $id => $entity) {
+      $array = array();
+      foreach ($fields as $field) {
+        if (in_array($field, array('nid', 'vid'))) {
+          continue;
+        }
+
+        if ($field == 'uid') {
+          $user = user_load($entity->{$field});
+          $value = array($user->name => get_object_vars($user));
+        }
+        elseif (in_array($field, $entity_fields)) {
+          switch ($field_info[$field]['type']) {
+            case 'entity_reference':
+
+              if (count($entity->{$field}) && (isset($entity->{$field}['und'])) && intval($entity->{$field}['und'][0]['target_id'])) {
+                $entityreference = site_dump_get_entity_reference($entity->{$field}, $field_info[$field]['settings']['target_type']);
+                $value = $entityreference;
+                unset($entityreference);
+              }
+              else {
+                $value = array();
+              }
+
+              break;
+            case 'image':
+              if (isset($entity->{$field}['und'][0]) && (count($entity->{$field}['und'][0]))) {
+                $filename = db_select('file_managed', 'f')
+                  ->fields('f', array('filename'))
+                  ->condition('fid', $entity->{$field}['und'][0]['fid'])
+                  ->execute()
+                  ->fetchCol();
+                if (count($filename) && (drupal_strlen($filename[0]))) {
+                  $value = array($filename[0] => $entity->{$field}['und'][0]);
+                }
+              }
+              else {
+                $value = array();
+              }
+              break;
+            case 'link':
+              $value = (isset($entity->{$field}['und'][0])) ? $entity->{$field}['und'][0] : array();
+              break;
+            case 'datetime':
+            case 'telephone':
+            default:
+              $value = ((isset($entity->{$field}['und'][0])) && (count($entity->{$field}['und'][0]))) ? $entity->{$field}['und'][0]['value'] : '';
+          }
+        }
+        else {
+          $value = $entity->{$field};
+        }
+
+        $array[$field] = $value;
+
+        unset($value);
+      }
+      $exports[$entity->type][$entity->uuid] = $array;
+    }
+  }
+
+  return $exports;
+}
+
+// DEPRECATED???
+function site_dump_import_content_types($type = '') {
+  if (!drupal_strlen($type)) {
+    return;
+  }
+  $filename = DRUPAL_ROOT . '/sites/default/files/site_dump/import/' . sprintf("site_dump.content_types.%s.yml", $type);
+  if (file_exists($filename)) {
+    $array = Yaml::parse($filename);
+    // create content type
+    if (isset($array['content_type']) && count($array['content_type'])) {
+      $type = node_type_set_defaults($array['content_type']);
+      node_type_save($type);
+      //node_type_save((object) $array['content_type']);
+    }
+    // FIELDS MANAGED BY CMI
+    //return;
+
+    if (isset($array['fields']) && count($array['fields'])) {
+      // prepare to create fields
+      field_info_cache_clear();
+
+      // Load all the existing fields and instance up-front so that we don't
+      // have to rebuild the cache all the time.
+      $existing_fields = field_info_fields();
+      $existing_instances = field_info_instances(); // node\article\body
+
+      foreach ($array['fields'] as $field) {
+        // Create or update field.
+        $field_config = $field['field_config'];
+        // Only create new fields
+        if (!isset($existing_fields[$field_config['field_name']])) {
+          field_create_field($field_config);
+          $existing_fields[$field_config['field_name']] = $field_config;
+        }
+
+        // Create or update field instance.
+        $field_instance = $field['field_instance'];
+        if (isset($existing_instances[$field_instance['entity_type']][$field_instance['bundle']][$field_instance['field_name']])) {
+          $existingFieldInstance = $existing_instances[$field_instance['entity_type']][$field_instance['bundle']][$field_instance['field_name']];
+//          if ($field_instance + $existingFieldInstance->definition != $existingFieldInstance) {
+//            field_update_instance($field_instance);
+//          }
+        }
+        else {
+          field_create_instance($field_instance);
+          $existing_instances[$field_instance['entity_type']][$field_instance['bundle']][$field_instance['field_name']] = $field_instance;
+        }
+      }
+      variable_set('menu_rebuild_needed', TRUE);
+    }
+  }
+}
+
+function site_dump_import_users($type = '') {
+  if (!(drupal_strlen($type))) {
+    return;
+  }
+  $filename = DRUPAL_ROOT . '/sites/default/files/site_dump/import/' . sprintf("site_dump.users.%s.yml", $type);
+  if (file_exists($filename)) {
+    $array = Yaml::parse($filename);
+    // role
+    $role = entity_create('user_role', $array['role']);
+    $role->save();
+    // users
+    if (isset($array['users']) && count($array['users'])) {
+      foreach ($array['users'] as $name => $user_definition) {
+        unset($user_definition['uid']);
+        $user = entity_create('user', $user_definition);
+        $user->save();
+      }
+    }
+  }
+}
+
+
+function site_dump_import_taxonomy($type = '') {
+  if (!(drupal_strlen($type))) {
+    return;
+  }
+
+  $array = Drupal::config('site_dump.taxonomy.' . $type)->get();
+  // Save vocabulary, if by any chance it doesn't exist
+  if (isset($array['vocabulary']) && count($array['vocabulary'])) {
+    $vocabulary = entity_load('taxonomy_vocabulary', $array['vocabulary']['vid']);
+    if (!($vocabulary)) {
+      $vocabulary = entity_create('taxonomy_vocabulary', $array['vocabulary']);
+      $vocabulary->save();
+    }
+  }
+
+  // save terms, if any
+  if (isset($array['terms']) && count($array['terms'])) {
+    $processed = array();
+    $top_level = array();
+    foreach ($array['terms'] as $term_array) {
+      // top level parents
+      if (!count($term_array['parents'])) {
+        if (!in_array($term_array['uuid'], $processed)) {
+          // TODO: save and record the uuid as processed
+          echo '<b>' . $term_array['name'] . '</b><br />';
+
+          // TODO: SAVE parent TID for later
+          $parent = $term_array['uuid'];
+          $processed[] = $top_level[] = $parent;
+        }
+      }
+      else {
+        foreach ($array['terms'] as $child_term) {
+          // has this been processed?
+          if (!in_array($child_term['uuid'], $processed)) {
+            // Is this a child?
+            if (isset($child_term['parents']) && count($child_term['parents'])) {
+              // Is this my child?
+              foreach ($child_term['parents'] as $uuid_child_parent => $child_parent) {
+                // Yes, process it
+                if (drupal_strlen($parent) && $parent == $uuid_child_parent) {
+                  // TODO: save and record the uuid as processed
+                  echo '-- ' . $child_term['name'] . '<br/>';
+
+                  // Add to processed
+                  $processed[] = $child_term['uuid'];
+
+                  // stop searching
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+
+function site_dump_import_entity($entity_type, $bundle, $id = 0) {
+  if (!drupal_strlen($entity_type)) {
+    return;
+  }
+  $filename = DRUPAL_ROOT . '/sites/default/files/site_dump/import/' . sprintf("site_dump.%s.%s%s.yml", $entity_type, $bundle, ($id > 0 ? sprintf('.%d', $id) : ''));
+  if (file_exists($filename)) {
+    $entities = Yaml::parse($filename);
+    if (count($entities)) {
+      $field_instance = field_info_instances($entity_type, $bundle);
+      $entity_fields = array_keys($field_instance);
+
+      $base_fields = site_dump_get_base_fields();
+      foreach ($entities as $entity) {
+        if (isset($entity['uuid']) && drupal_strlen($entity['uuid'])) {
+          $new_entity = entity_load_by_uuid($entity_type, $entity['uuid']);
+        }
+        if (!$new_entity) {
+          $edit = array();
+          foreach ($base_fields as $base_field) {
+            // user object
+            if (in_array($base_field, array(
+                'uid',
+                'revision_uid'
+              )) && isset($entity[$base_field]) && is_array($entity[$base_field])
+            ) {
+              $edit[$base_field] = site_dump_get_entity_from_reference($entity[$base_field], 'user');
+            }
+            else {
+              $edit[$base_field] = $entity[$base_field];
+            }
+          }
+          $new_entity = entity_create('node', $edit);
+          if (count($entity_fields)) {
+            foreach ($entity_fields as $entity_field) {
+//              $field_info = field_info_field('node', $entity_field);
+              $field_info = Field::fieldInfo()->getField($entity_field);
+              switch ($field_info->type) {
+                case 'taxonomy_term_reference':
+                  if (isset($entity[$entity_field]) && count($entity[$entity_field])) {
+                    $target_id = site_dump_get_entity_from_reference($entity[$entity_field], 'taxonomy_term');
+                    if ($target_id) {
+                      $new_entity->{$entity_field}['und'][0]['tid'] = $target_id;
+                    }
+                    else {
+                      $new_entity->{$entity_field} = array();
+                    }
+                  }
+                  break;
+
+                case 'entity_reference':
+                  if (isset($entity[$entity_field]) && count($entity[$entity_field])) {
+                    $target_id = site_dump_get_entity_from_reference($entity[$entity_field], $field_info->settings['target_type']);
+                    if ($target_id) {
+                      $new_entity->{$entity_field}['und'][0]['target_id'] = $target_id;
+                    }
+                    else {
+                      $new_entity->{$entity_field} = array();
+                    }
+                  }
+                  break;
+                case 'datetime':
+                  $new_entity->{$entity_field}['und'][0]['value']['date'] = ($entity[$entity_field]) ? $entity[$entity_field] : '';
+                  break;
+                // TODO:
+                case 'image':
+                  if (isset($entity[$entity_field]) && count($entity[$entity_field])) {
+                    $image = site_dump_image_field_add($entity[$entity_field], $field_instance[$entity_field], field_read_instance($entity_type, $entity_field, $bundle), $bundle);
+                    if (count($image) && $image['fid']) {
+                      $new_entity->{$entity_field}['und'][0] = $image;
+                    }
+                    else {
+                      $new_entity->{$entity_field} = array();
+                    }
+                  }
+                  break;
+                case 'list_boolean':
+                  $new_entity->{$entity_field}['und'][0]['value'] = intval($entity[$entity_field]);
+                  break;
+                case 'link':
+                  $link = (is_array($entity[$entity_field] && isset($entity[$entity_field]['url']))) ? array(
+                    'url' => $entity[$entity_field]['url'],
+                    'title' => $entity[$entity_field]['title']
+                  ) : array();
+                  if ($link) {
+                    $new_entity->{$entity_field}['und'][0] = $link;
+                  }
+                  else {
+                    $new_entity->{$entity_field} = $link;
+                  }
+                  break;
+                default:
+                  $new_entity->{$entity_field}['und'][0]['value'] = ($entity[$entity_field]) ? $entity[$entity_field] : '';
+              }
+            }
+          }
+        }
+
+        if ($new_entity) {
+          $new_entity->save();
+        }
+      }
+    }
+  }
+}
+
+
+/**
+ * Implements hook_page_alter().
+ */
+function site_dump_page_alter(&$page) {
+
+//  // @todo: Find a way to implement the following. beta-10 introduced #markup here.
+//  if (current_path() == 'admin/structure/types') {
+//    if(isset($page['content']['seven_content']['content'][0]['#rows'])) {
+//      foreach ($page['content']['seven_content']['content'][0]['#rows'] as $key => $row) {
+//        if (isset($row['operations']['data']['#links']) && count($row['operations']['data']['#links'])) {
+//          $href_parts = explode('/', $row['operations']['data']['#links']['edit']['href']);
+//          $export = array(
+//            'title' => t('Export type'),
+//            'href' => 'admin/config/development/site_dump/export/content_types/' . array_pop($href_parts),
+//            'weight' => 100,
+//          );
+//
+//          $page['content']['seven_content']['content'][0]['#rows'][$key]['operations']['data']['#links']['export'] = $export;
+//        }
+//      }
+//    }
+//  }
+
+//  // @todo:
+//  // admin/structure/taxonomy
+//  if ((arg(0) == 'admin') && (arg(1) == 'structure') && (arg(2) == 'taxonomy') &&
+//    (arg(3) == '')
+//  ) {
+//    $vocabularies = taxonomy_vocabulary_load_multiple();
+//    taxonomy_vocabulary_sort($vocabularies);
+//    foreach ($vocabularies as $vocabulary) {
+//      $export = array(
+//        'title' => t('export vocabulary'),
+//        'href' => 'admin/config/development/site_dump/export/taxonomy/' . $vocabulary->id(),
+//        'weight' => 100,
+//      );
+//      $page['content']['seven_content']['content'][0][$vocabulary->id()]['operations']['#links']['export'] = $export;
+//    }
+//  }
+
+  // admin/people/roles
+//  if ((arg(0) == 'admin') && (arg(1) == 'people') && (arg(2) == 'roles') && (arg(3) ==
+//      '')
+//  ) {
+//    foreach ($page['content']['seven_content']['content'][0]['roles'] as $key => $value) {
+//      if (is_array($value) && isset($value['#role'])) {
+//        if ($key !== 'anonymous') {
+//          $export = array(
+//            'title' => t('export users'),
+//            'href' => 'admin/config/development/site_dump/export/users/' . $key,
+//            'weight' => 100,
+//          );
+//          $page['content']['seven_content']['content'][0]['roles'][$key]['operations']['#links']['export'] = $export;
+//        }
+//      }
+//    }
+//  }
+
+}
+
+// Borrowed from features module
+function _site_dump_export_sort(&$field, $sort = TRUE) {
+  // Some arrays are not sorted to preserve order (for example allowed_values).
+  static $sort_blacklist = array(
+    'allowed_values',
+    'format_handlers',
+  );
+
+  if ($sort) {
+    ksort($field);
+  }
+  foreach ($field as $k => $v) {
+    if (is_array($v)) {
+      _site_dump_export_sort($field[$k], !in_array($k, $sort_blacklist));
+    }
+  }
+}
+
+function site_dump_get_entity_reference($value, $target_type) {
+  $entity_reference = array();
+  if (is_array($value) && isset($value['und'])) {
+    $key = ($target_type == 'taxonomy_term') ? 'tid' : 'nid';
+    $object = entity_load($target_type, intval($value['und'][0]['target_id']), TRUE);
+    if (is_object($object)) {
+      unset($object->$key);
+      foreach (site_dump_get_base_fields($target_type) as $field) {
+        $array[$field] = $object->{$field};
+      }
+      $entity_reference[$object->uuid] = $array;
+      unset($object);
+    }
+  }
+  return $entity_reference;
+}
+
+function site_dump_get_entity_from_reference($value, $target_type) {
+  if (!$value) {
+    return;
+  }
+
+  $entity_reference = FALSE;
+  if (is_array($value)) {
+    $keys = array_keys($value);
+    $value = $value[$keys[0]];
+    switch ($target_type) {
+      case 'taxonomy_term':
+        if (isset($value['vid'])) {
+          // does this vocabulary exist?
+          $vocabulary = entity_load('taxonomy_vocabulary', $value['vid']);
+          if (!($vocabulary)) {
+            $vocabulary = entity_create('taxonomy_vocabulary', array(
+              'vid' => $value['vid'],
+              'name' => $value['vid'],
+              'description' => sprintf('Imported vocabulary: %s', $value['vid'])
+            ));
+            $vocabulary->save();
+          }
+        }
+        $term = FALSE;
+        if (isset($value['uuid']) && drupal_strlen($value['uuid'])) {
+          $term = entity_load_by_uuid($target_type, $value['uuid']);
+        }
+        if (!($term)) {
+          $term = entity_create($target_type, $value);
+          $term->save();
+        }
+
+        $entity_reference = $term->values['tid']['und'];
+
+        break;
+
+      case 'user':
+        // does this user exist?
+        $user = FALSE;
+        if (isset($value['uuid']) && drupal_strlen($value['uuid'])) {
+          $user = entity_load_by_uuid($target_type, $value['uuid']);
+        }
+        else {
+          $users = entity_load_multiple_by_properties($target_type, array(
+            'name' => $value['name'],
+            'mail' => $value['mail']
+          ));
+          if (is_array($users)) {
+            $keys = array_keys($users);
+            $user = $users[$keys[0]];
+          }
+        }
+
+        if (!$user) {
+          $user = entity_create($target_type, $value);
+          $user->save();
+        }
+        $entity_reference = $user->uid;
+        break;
+
+      default:
+
+        // does this entity exist?
+        $entity = FALSE;
+        if (isset($value['uuid']) && drupal_strlen($value['uuid'])) {
+          $entity = entity_load_by_uuid($target_type, $value['uuid']);
+        }
+        if (!$entity && $keys[0]) {
+          $entity = entity_load_by_uuid($target_type, $keys[0]);
+        }
+        if (!$entity && $target_type && $value) {
+          $entity = entity_create($target_type, $value);
+          $entity->save();
+        }
+        $entity_reference = $entity->nid;
+        break;
+    }
+  }
+  else {
+    $entity_reference = $value;
+  }
+  return $entity_reference;
+}
+
+function site_dump_get_base_fields($type = 'node') {
+  switch ($type) {
+    case 'user':
+      $fields = array(
+        'uuid',
+        'name',
+        'pass',
+        'mail',
+        'theme',
+        'status',
+        'signature',
+        'signature_format',
+        'created',
+        'access',
+        'login',
+        'status',
+        'timezone',
+        'langcode',
+        'preferred_langcode',
+        'preferred_admin_langcode',
+        'init',
+        'roles',
+        'user_picture'
+      );
+      break;
+    case 'taxonomy_vocabulary':
+      $fields = array(
+        'uuid',
+        'vid',
+        'name',
+        'description',
+        'format',
+        'weight',
+        'parent',
+        'langcode'
+      );
+      break;
+    case 'taxonomy_term':
+      $fields = array(
+        'uuid',
+        'vid',
+        'name',
+        'description',
+        'format',
+        'weight',
+        'parent',
+        'langcode'
+      );
+      break;
+    case 'node':
+      $fields = array(
+        'uuid',
+        'type',
+        'langcode',
+        'title',
+        'uid',
+        'status',
+        'created',
+        'changed',
+        'comment',
+        'promote',
+        'sticky',
+        'tnid',
+        'translate',
+        'revision_timestamp',
+        'log'
+      );
+  }
+  return $fields;
+}
+
+function site_dump_image_field_add($object, $field, $instance, $bundle) {
+  $keys = array_keys($object);
+  $source = entity_create('file', array());
+  $source->uri = 'public://site_dump/import/images/' . $keys[0];
+  $source->uid = 1;
+  $source->filemime = 'image/' . pathinfo($source->uri, PATHINFO_EXTENSION);
+  $source->filename = drupal_basename($source->uri);
+  $destination_dir = $field->getField()->settings['uri_scheme'] . '://' . $instance['settings']['file_directory'];
+  file_prepare_directory($destination_dir, FILE_CREATE_DIRECTORY);
+  $destination = $destination_dir . '/' . basename($source->uri);
+  $file = file_move($source, $destination, FILE_CREATE_DIRECTORY);
+
+  $object_field = array();
+  if ($file->fid) {
+    $object_field['fid'] = $file->fid;
+    $object_field['alt'] = $object[$keys[0]]['alt'];
+    $object_field['title'] = $object[$keys[0]]['title'];
+  }
+
+  return $object_field;
+}
+
+function site_dump_form_alter($form, &$form_state) {
+//dpm($node->getPropertyValues());
+//  dpm($form);
+}
+
+/**
+ * Array of exportable components.
+ * @return array
+ */
+function site_dump_get_components() {
+  $components = array(
+    'users' => t('Users'),
+    'taxonomy' => t('Taxonomy terms'),
+  );
+  foreach (node_type_get_names() as $node_type => $name) {
+    $components['node-' . $node_type] = '(node) ' . $name;
+  }
+  return $components;
+}
+
+/**
+ * Replace parent term ids with the UUID of the referenced terms.
+ *
+ * @param $parent_terms
+ * @param $term
+ */
+function site_dump_get_term_parents($parent_terms, &$term) {
+  $new_parents = array();
+  $parents = $term->parents;
+  foreach ($parents as $parent) {
+    foreach ($parent_terms as $parent_term) {
+      //debug($parent_term);
+      if ($parent_term->tid == $parent) {
+        // tid is an integer so probably not very helpful to keep it
+        $exported_term = get_object_vars($parent_term);
+        unset($exported_term['tid']);
+        $new_parents[$parent_term->uuid] = $exported_term;
+        break;
+      }
+    }
+  }
+  $term->parents = $new_parents;
+}
+
+function site_dump_create_term($term) {
+  // test_complex_vocal_taxonomy_term_form
+  $form_state['values'] = array();
+  return drupal_form_submit(drupal_get_form('test_complex_vocal_taxonomy_term_form'), $form_state);
+}
+
+
+function site_dump_convert_csv_to_yaml() {
+
+  $uuid = new \Drupal\Component\Uuid\Uuid();
+
+  $files = directoryToArray(drupal_get_path('module', 'site_dump') . '/import');
+  foreach ($files as $srcfile) {
+    $dstfile = str_replace('/import/', '/Fixtures/', $srcfile);
+    if (strpos($srcfile, '/images/') !== FALSE) {
+      //mkdir(dirname($dstfile), 0777, true);
+      //copy($srcfile, $dstfile);
+    }
+    elseif (strpos($srcfile, '.csv') !== FALSE) {
+      // if file is csv, read content to array, convert to yml, write the file to Fixtures
+      //$dstfile = str_replace('.csv', '.yml', $dstfile);
+
+      $data = array();
+      $f = @fopen($srcfile, "r");
+      $keys = array_map('trim', fgetcsv($f));
+      while (!feof($f)) {
+        $row = fgetcsv($f);
+        if ($row !== FALSE && count($row) == count($keys)) {
+          $rowData = array_combine($keys, $row);
+          if (!isset($row['uuid']) || !drupal_strlen($row['uuid'])) {
+            $rowData['uuid'] = $uuid->generate();
+          }
+          $data[$rowData['uuid']] = $rowData;
+        }
+
+        if (count($data)) {
+          switch (TRUE) {
+            case (strpos($srcfile, 'pe_user_example') !== FALSE):
+              $component = 'user';
+              break;
+            case (strpos($srcfile, 'pe_group') !== FALSE):
+              $component = 'og';
+              break;
+            case (strpos($srcfile, 'pe_user_groups') !== FALSE):
+              $component = 'og_user';
+              break;
+            case (strpos($srcfile, 'profile') !== FALSE):
+              $component = 'profile';
+              break;
+            default:
+              $component = 'node';
+              break;
+          }
+
+//          if($component != 'profile') {
+//            continue;
+//          }
+
+          if (drupal_strlen($component) && strpos($srcfile, '_example') !== FALSE) {
+            $frags = explode('/', $srcfile);
+            $key = str_replace('_example.csv', '', array_pop($frags));
+
+            $config = Drupal::config(sprintf('site_dump.%s.%s', $component, $key));
+            $config->set(sprintf("%ss", $component), $data);
+            $config->setData($data);
+            $config->save();
+          }
+        }
+      }
+    }
+  }
+
+  return;
+}
+
+
+/**
+ * Get an array that represents directory tree
+ * @param string $directory Directory path
+ * @param bool $recursive Include sub directories
+ * @param bool $listDirs Include directories on listing
+ * @param bool $listFiles Include files on listing
+ * @param regex $exclude Exclude paths that matches this regex
+ */
+function directoryToArray($directory, $recursive = TRUE, $listDirs = FALSE, $listFiles = TRUE, $exclude = '') {
+  $arrayItems = array();
+  $skipByExclude = FALSE;
+  $handle = opendir($directory);
+  if ($handle) {
+    while (FALSE !== ($file = readdir($handle))) {
+      preg_match("/(^(([\.]){1,2})$|(\.(svn|git|md))|(Thumbs\.db|\.DS_STORE))$/iu", $file, $skip);
+      if ($exclude) {
+        preg_match($exclude, $file, $skipByExclude);
+      }
+      if (!$skip && !$skipByExclude) {
+        if (is_dir($directory . DIRECTORY_SEPARATOR . $file)) {
+          if ($recursive) {
+            $arrayItems = array_merge($arrayItems, directoryToArray($directory . DIRECTORY_SEPARATOR . $file, $recursive, $listDirs, $listFiles, $exclude));
+          }
+          if ($listDirs) {
+            $file = $directory . DIRECTORY_SEPARATOR . $file;
+            $arrayItems[] = $file;
+          }
+        }
+        else {
+          if ($listFiles) {
+            $file = $directory . DIRECTORY_SEPARATOR . $file;
+            $arrayItems[] = $file;
+          }
+        }
+      }
+    }
+    closedir($handle);
+  }
+  return $arrayItems;
+}

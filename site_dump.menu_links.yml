@@ -1,0 +1,5 @@
+site_dump.import:
+  title: 'SiteDump management'
+  description: 'Import, or export your dumped site content.'
+  route_name: site_dump.import
+  parent: system.admin_config_development
