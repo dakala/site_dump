@@ -38,30 +38,13 @@ function site_dump_help($route_name, RouteMatchInterface $route_match) {
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
 function site_dump_page_build(&$page) {
   $path = drupal_get_path('module', 'site_dump');
   // Add JavaScript/CSS assets to all pages.
   // @see drupal_process_attached()
   $page['#attached']['css'][$path . '/css/pedu.css'] = array('every_page' => TRUE);
 
-  // Add a special CSS file to a certain page only.
-  if (drupal_is_front_page()) {
-//    $page['#attached']['css'][] = $path . '/foo.front.css';
-  }
 }
-
-
 
 /**
  * Implements hook_permission().
@@ -69,6 +52,34 @@ function site_dump_page_build(&$page) {
 function site_dump_permission() {
   return array('dump site components' => array('title' => t('Import/Export site components.'),),);
 }
+
+/**
+ * Implements hook_file_download().
+ */
+function site_dump_file_download($uri) {
+  $scheme = file_uri_scheme($uri);
+  $target = file_uri_target($uri);
+  if ($scheme == 'temporary' && $target == 'site_dump.tar.gz') {
+    return array(
+      'Content-disposition' => 'attachment; filename="site_dump.tar.gz"',
+    );
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /**
  * @return mixed
@@ -263,10 +274,6 @@ function site_dump_export_users($type = '') {
       $exports[$role->id]['users'][$user->name] = get_object_vars($user);
     }
   }
-
-  var_dump($exports);
-  die('xxxxx:');
-
   return $exports;
 }
 

@@ -7,7 +7,7 @@
 
 namespace Drupal\site_dump\Controller;
 
-use Drupal\Component\Archiver\ArchiveTar;
+use Drupal\Core\Archiver\ArchiveTar;
 use Drupal\Component\Serialization\Yaml;
 use Drupal\Core\Config\ConfigManagerInterface;
 use Drupal\Core\Config\StorageInterface;
@@ -15,6 +15,10 @@ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
 use Drupal\system\FileDownloadController;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\Request;
+use Drupal\node\Entity\Node;
+use Drupal\user\Entity\User;
+use Drupal\taxonomy\Entity\Vocabulary;
+
 
 /**
  * Returns responses for config module routes.
@@ -81,25 +85,133 @@ class ConfigController implements ContainerInjectionInterface {
   /**
    * Downloads a tarball of the site configuration.
    */
-  public function downloadExport($location) {
-    // Determine items to export
-    // Export each item
-    // Create file
-    // Add to archive
-    // Download
+  public function downloadExport($exportables) {
+    $files = array();
+    file_unmanaged_delete(file_directory_temp() . '/site_dump.tar.gz');
+    $archiver = new ArchiveTar(file_directory_temp() . '/site_dump.tar.gz', 'gz');
+    // Get items to export.
+    foreach (explode(':', $exportables) as $exportable) {
+      list($entity_type, $bundle, $id) = explode('-', $exportable);
+      $exports = $this->getExports($entity_type, $bundle, $id);
 
-    var_dump($location);
-//    file_unmanaged_delete(file_directory_temp() . '/site_dump.tar.gz');
+//      // Create file.
+//      if (count($exports)) {
+//        foreach ($exports as $key => $export) {
+//          $filename = file_directory_temp() . '/' . sprintf("site_dump.%s.%s%s.yml", $entity_type, $key, (($id > 0) ? sprintf('.%d', $id) : ''));
 //
-//    $archiver = new ArchiveTar(file_directory_temp() . '/site_dump.tar.gz', 'gz');
-//
-//    foreach (\Drupal::service('config.storage')->listAll() as $name) {
-//      $archiver->addString("$name.yml", Yaml::encode(\Drupal::config($name)->get()));
+//          $fh = fopen($filename, 'w');
+//          fwrite($fh, Yaml::encode($export));
+//          fclose($fh);
+//          $files[] = $filename;
+//        }
+//      }
 //    }
+//    $archiver->create($files);
 //
-//    $request = new Request(array('file' => 'config.tar.gz'));
+//    $request = new Request(array('file' => 'site_dump.tar.gz'));
 //    return $this->fileDownloadController->download($request, 'temporary');
 
+
+      foreach ($exports as $key => $export) {
+        $root = sprintf("site_dump.%s.%s%s", $entity_type, $key, (($id > 0) ? sprintf('.%d', $id) : ''));
+        $config = \Drupal::config($root);
+        foreach ($export as $key => $value) {
+          $config->set($key, $value);
+        }
+        $config->save();
+      }
+
+    } // remove me with config foreach block!!!
+
+
+  }
+
+
+  /**
+   * Process exports.
+   *
+   * @param $type
+   * @param $bundle
+   * @param $id
+   * @return array
+   */
+  public function getExports($type, $bundle, $id) {
+    $exports = array();
+    switch ($type) {
+      case 'node':
+        $entity_type = $type;
+        $properties['type'] = $bundle;
+        break;
+      case 'user':
+        $entity_type = $type;
+        break;
+      case 'taxonomy_vocabulary':
+        $entity_type = 'taxonomy_term';
+        $properties['vid'] = $bundle;
+        break;
+    }
+
+    $properties['status'] = 1;
+
+    if ($id) {
+      $properties['id'] = $id;
+    }
+
+    // Get field names.
+    $fields = array_keys(\Drupal::entityManager()
+      ->getFieldDefinitions($entity_type, ($entity_type == 'user') ? $entity_type : $bundle));
+    // Create associative array from field names.
+    $fields = array_flip($fields);
+
+    $entities = \Drupal::entityManager()
+      ->getStorage($entity_type)
+      ->loadByProperties($properties);
+
+    // @todo: better way to get users having a role.
+    if ($entity_type == 'user') {
+      $entities = array_filter($entities, function ($entity) use ($bundle) {
+        return $entity->hasRole($bundle);
+      });
+    }
+
+    foreach ($entities as $entity) {
+      array_walk($fields, array($this, 'map_field_values'), $entity);
+      $exports[$bundle][$entity->uuid()] = $fields;
+    }
+
+    return $exports;
+  }
+
+  /**
+   * Map entity properties to array.
+   *
+   * @param $value
+   * @param $key
+   * @param $entity
+   */
+  public function map_field_values(&$value, $key, $entity) {
+    $field_value = $entity->{$key}->getValue()[0];
+    // todo: multi-value fields.
+    switch (TRUE) {
+      case ($entity instanceof User && $key == 'roles'):
+        $value = $entity->getRoles();
+        break;
+
+      case (is_array($field_value) && array_key_exists('value', $field_value)):
+        $value = $field_value['value'];
+        break;
+
+      case (is_array($field_value) && array_key_exists('target_id', $field_value)):
+        $value = $field_value['target_id'];
+        break;
+
+      case (is_null($field_value) || empty($field_value)):
+        $value = '';
+        break;
+
+      default:
+        $value = $field_value;
+    }
   }
 
 }

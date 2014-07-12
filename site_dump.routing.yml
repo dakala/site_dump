@@ -15,7 +15,7 @@ site_dump.export:
     _permission: 'export configuration'
 
 site_dump.export_download:
-  path: '/admin/config/development/site_dump/full/export-download/{location}'
+  path: '/admin/config/development/site_dump/full/export-download/{exportables}'
   defaults:
     _controller: '\Drupal\site_dump\Controller\ConfigController::downloadExport'
   requirements:

@@ -9,6 +9,9 @@ namespace Drupal\site_dump\Form;
 
 use Drupal\Core\Form\FormBase;
 use Symfony\Component\Yaml\Yaml;
+use Drupal\taxonomy\Entity\Term;
+use Drupal\taxonomy\Entity\Vocabulary;
+
 
 /**
  * Defines the configuration export form.
@@ -41,7 +44,6 @@ class SiteDumpExportForm extends FormBase {
       '#submit' => array(array($this, 'convertCSVtoYAML')),
     );
 
-    $components = site_dump_get_components();
     $form['export'] = array(
       '#type' => 'details',
       '#title' => $this->t('Export'),
@@ -51,7 +53,7 @@ class SiteDumpExportForm extends FormBase {
     $form['export']['export_components'] = array(
       '#type' => 'checkboxes',
       '#title' => $this->t('Exportables'),
-      '#options' => $components,
+      '#options' => $this->components(),
       '#description' => $this->t('Selected items will be exported into files named in a specific format.'),
     );
 
@@ -67,16 +69,48 @@ class SiteDumpExportForm extends FormBase {
    * {@inheritdoc}
    */
   public function submitForm(array &$form, array &$form_state) {
-    // 1. generate export files one after the other - $form_state['values']['export_components']
-    // 2. call exportDownload with file path param.
-    $form_state['redirect_route'] = array(
-      'route_name' => 'site_dump.export_download',
-    );
+    $exportables = array_filter(array_values($form_state['values']['export_components']));
+    if (count($exportables)) {
+      $form_state['redirect_route'] = array(
+        'route_name' => 'site_dump.export_download',
+        'route_parameters' => array('exportables' => implode(':', $exportables)),
+      );
+    }
+    else {
+      drupal_set_message(t('No components to export.'));
+    }
   }
 
+  /**
+   * Array of exportable components.
+   * @return array
+   */
+  public function components() {
+    // Users
+    foreach (user_roles(TRUE) as $role) {
+      $components['user-' . $role->id()] = '(user) ' . $role->label();
+    }
+    // Terms
+    foreach (Vocabulary::loadMultiple() as $vocab) {
+      $components['taxonomy_vocabulary-' . $vocab->id()] = '(term) ' . $vocab->name;
+    }
+    // Nodes
+    foreach (node_type_get_names() as $node_type => $name) {
+      $components['node-' . $node_type] = '(node) ' . $name;
+    }
+    return $components;
+  }
+
+
+  /**
+   * Form submit callback function to convert CSV to YAML files.
+   *
+   * @param array $form
+   * @param array $form_state
+   */
   public function convertCSVtoYAML(array &$form, array &$form_state) {
-    $files = glob(DRUPAL_ROOT . '/' . drupal_get_path('module', 'site_dump') . '/import/*.csv');
-    if(count($files)) {
+    $files = glob(DRUPAL_ROOT . '/sites/default/files/site_dump/import/csv/*.csv');
+    if (count($files)) {
       foreach ($files as $srcfile) {
         $data = array();
         $f = @fopen($srcfile, "r");
@@ -91,7 +125,7 @@ class SiteDumpExportForm extends FormBase {
             }
             $data[$rowData['uuid']] = $rowData;
           }
-          // TODO: migration naming convention.
+          // TODO: upgrade to migration naming convention.
           if (count($data)) {
             switch (TRUE) {
               case (strpos($srcfile, 'pe_user_example') !== FALSE):
@@ -120,15 +154,15 @@ class SiteDumpExportForm extends FormBase {
           // Get new path and filename.
           $pathinfo = pathinfo($srcfile);
           $dstfile = str_replace($pathinfo['basename'], $ymlFile, $srcfile);
-          $dstfile = str_replace('/import/', '/Fixtures/', $dstfile);
+          $dstfile = str_replace('/csv/', '/yml/', $dstfile);
           // Write data to yaml file.
           $yaml = Yaml::dump($data);
           file_put_contents($dstfile, $yaml);
           chmod($dstfile, 0777);
         }
       }
+      drupal_set_message($this->t('CSVs converted to YAML'));
     }
-    drupal_set_message($this->t('CSVs converted to YAML'));
   }
 
 }
