@@ -168,25 +168,6 @@ function site_dump_export_components($component, $type = '', $id = '') {
   }
 }
 
-// TODO: core CMI
-function site_dump_discover_importables() {
-  $importables = array();
-  $path = DRUPAL_ROOT . '/sites/default/files/site_dump/import';
-  if ($handle = opendir($path)) {
-    while (FALSE !== ($file = readdir($handle))) {
-      if ($file != "." && $file != "..") {
-        $frags = explode('.', $file);
-        if (array_pop($frags) == 'yml') {
-          $key = sprintf('%s--%s%s', $frags[1], $frags[2], (isset($frags[3]) ? sprintf('--%s', $frags[3]) : ''));
-          $importables[$key] = sprintf("(%s%s) %s", $frags[1], (isset($frags[3]) ? sprintf('-%s', $frags[3]) : ''), $frags[2]);
-        }
-      }
-    }
-    closedir($handle);
-  }
-  return $importables;
-}
-
 function site_dump_import_components_submit($form_id, &$form_state) {
   $components = $form_state['values']['import_components'];
   if (count($components)) {

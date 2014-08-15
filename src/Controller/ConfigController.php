@@ -94,35 +94,32 @@ class ConfigController implements ContainerInjectionInterface {
       list($entity_type, $bundle, $id) = explode('-', $exportable);
       $exports = $this->getExports($entity_type, $bundle, $id);
 
-//      // Create file.
-//      if (count($exports)) {
-//        foreach ($exports as $key => $export) {
-//          $filename = file_directory_temp() . '/' . sprintf("site_dump.%s.%s%s.yml", $entity_type, $key, (($id > 0) ? sprintf('.%d', $id) : ''));
-//
-//          $fh = fopen($filename, 'w');
-//          fwrite($fh, Yaml::encode($export));
-//          fclose($fh);
-//          $files[] = $filename;
-//        }
-//      }
-//    }
-//    $archiver->create($files);
-//
-//    $request = new Request(array('file' => 'site_dump.tar.gz'));
-//    return $this->fileDownloadController->download($request, 'temporary');
+      // Create file.
+      if (count($exports)) {
+        foreach ($exports as $key => $export) {
+          $filename = file_directory_temp() . '/' . sprintf("site_dump.%s.%s%s.yml", $entity_type, $key, (($id > 0) ? sprintf('.%d', $id) : ''));
 
-
-      foreach ($exports as $key => $export) {
-        $root = sprintf("site_dump.%s.%s%s", $entity_type, $key, (($id > 0) ? sprintf('.%d', $id) : ''));
-        $config = \Drupal::config($root);
-        foreach ($export as $key => $value) {
-          $config->set($key, $value);
+          $fh = fopen($filename, 'w');
+          fwrite($fh, Yaml::encode($export));
+          fclose($fh);
+          $files[] = $filename;
         }
-        $config->save();
       }
+    }
+    $archiver->create($files);
 
-    } // remove me with config foreach block!!!
+    $request = new Request(array('file' => 'site_dump.tar.gz'));
+    return $this->fileDownloadController->download($request, 'temporary');
 
+//      foreach ($exports as $key => $export) {
+//        $root = sprintf("site_dump.%s.%s%s", $entity_type, $key, (($id > 0) ? sprintf('.%d', $id) : ''));
+//        $config = \Drupal::config($root);
+//        foreach ($export as $key => $value) {
+//          $config->set($key, $value);
+//        }
+//        $config->save();
+//      }
+//    } // remove me with config foreach block!!!
 
   }
 
@@ -135,19 +132,23 @@ class ConfigController implements ContainerInjectionInterface {
    * @param $id
    * @return array
    */
-  public function getExports($type, $bundle, $id) {
+  public function getExports($type, $bundle = '', $id = '') {
     $exports = array();
     switch ($type) {
       case 'node':
         $entity_type = $type;
-        $properties['type'] = $bundle;
+        if ($bundle) {
+          $properties['type'] = $bundle;
+        }
         break;
       case 'user':
         $entity_type = $type;
         break;
       case 'taxonomy_vocabulary':
         $entity_type = 'taxonomy_term';
-        $properties['vid'] = $bundle;
+        if ($bundle) {
+          $properties['vid'] = $bundle;
+        }
         break;
     }
 
@@ -161,7 +162,7 @@ class ConfigController implements ContainerInjectionInterface {
     $fields = array_keys(\Drupal::entityManager()
       ->getFieldDefinitions($entity_type, ($entity_type == 'user') ? $entity_type : $bundle));
     // Create associative array from field names.
-    $fields = array_flip($fields);
+    //$fields = array_flip($fields);
 
     $entities = \Drupal::entityManager()
       ->getStorage($entity_type)
@@ -190,9 +191,12 @@ class ConfigController implements ContainerInjectionInterface {
    * @param $entity
    */
   public function map_field_values(&$value, $key, $entity) {
+    // $value if fieldInfo object
+
     $field_value = $entity->{$key}->getValue()[0];
     // todo: multi-value fields.
     switch (TRUE) {
+      // user roles
       case ($entity instanceof User && $key == 'roles'):
         $value = $entity->getRoles();
         break;
@@ -201,6 +205,12 @@ class ConfigController implements ContainerInjectionInterface {
         $value = $field_value['value'];
         break;
 
+      // @todo: image fields
+      case (is_array($field_value) && array_key_exists('fids', $field_value)):
+        $value = $field_value['fids'];
+        break;
+
+      // @todo: entityref, taxref fields
       case (is_array($field_value) && array_key_exists('target_id', $field_value)):
         $value = $field_value['target_id'];
         break;

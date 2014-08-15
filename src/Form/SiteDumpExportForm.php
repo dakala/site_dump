@@ -29,6 +29,10 @@ class SiteDumpExportForm extends FormBase {
    * {@inheritdoc}
    */
   public function buildForm(array $form, array &$form_state) {
+//    $fields = \Drupal::entityManager()->getFieldDefinitions('node', 'test_ct');
+//    var_dump($fields['field_my_image']->getType());
+//    var_dump($fields['field_my_image']->getType());
+
     $form['description'] = array(
       '#markup' => '<p>' . $this->t('Use the export button below to download selected items.') . '</p>',
     );
