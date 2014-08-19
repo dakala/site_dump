@@ -10,6 +10,7 @@ namespace Drupal\site_dump\Form;
 use Drupal\Core\Config\StorageInterface;
 use Drupal\Core\Form\FormBase;
 use Drupal\Core\Archiver\ArchiveTar;
+use Drupal\Core\Form\FormStateInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
 /**
@@ -53,7 +54,7 @@ class SiteDumpImportForm extends FormBase {
   /**
    * {@inheritdoc}
    */
-  public function buildForm(array $form, array &$form_state) {
+  public function buildForm(array $form, FormStateInterface $form_state) {
 //    $values = array(
 //      'title' => 'this is my test ct page',
 //      'created' => '2014-07-14 08:14:59',
@@ -114,7 +115,7 @@ class SiteDumpImportForm extends FormBase {
   /**
    * {@inheritdoc}
    */
-  public function submitForm(array &$form, array &$form_state) {
+  public function submitForm(array &$form, FormStateInterface $form_state) {
 
 
     drupal_set_message(t('Import of selected component(s) done.'));

@@ -196,7 +196,7 @@ function site_dump_export_content_types($type = '') {
     $entity_type = $content_type->module;
     $exports[$bundle]['content_type'] = (array) $content_type;
 //    $field_infos = field_read_fields(array('entity_type' => $entity_type, 'bundle' => $bundle));
-    $field_infos = entity_load_multiple_by_properties('field_config', array(
+    $field_infos = entity_load_multiple_by_properties('field_storage_config', array(
       'entity_type' => $entity_type,
       'bundle' => $bundle
     ));
@@ -217,8 +217,8 @@ function site_dump_export_content_types($type = '') {
       unset($instance_info['field_id']);
 
       $field_definition_array = array(
-        'field_config' => $field_info,
-        'field_instance' => $instance_info,
+        'field_storage_config' => $field_info,
+        'field_instance_config' => $instance_info,
       );
 
       _site_dump_export_sort($field_definition_array);
@@ -333,7 +333,7 @@ function site_dump_export_entity($entity_type, $bundle, $id = 0) {
 //      'entity_type' => $entity_type,
 //      'bundle' => $bundle
 //    ));
-    $field_info = entity_load_multiple_by_properties('field_config', array(
+    $field_info = entity_load_multiple_by_properties('field_storage_config', array(
       'entity_type' => $entity_type,
       'bundle' => $bundle
     ));
@@ -432,7 +432,7 @@ function site_dump_import_content_types($type = '') {
 
       foreach ($array['fields'] as $field) {
         // Create or update field.
-        $field_config = $field['field_config'];
+        $field_config = $field['field_storage_config'];
         // Only create new fields
         if (!isset($existing_fields[$field_config['field_name']])) {
           field_create_field($field_config);

@@ -8,6 +8,7 @@
 namespace Drupal\site_dump\Form;
 
 use Drupal\Core\Form\FormBase;
+use Drupal\Core\Form\FormStateInterface;
 use Symfony\Component\Yaml\Yaml;
 use Drupal\taxonomy\Entity\Term;
 use Drupal\taxonomy\Entity\Vocabulary;
@@ -28,7 +29,7 @@ class SiteDumpExportForm extends FormBase {
   /**
    * {@inheritdoc}
    */
-  public function buildForm(array $form, array &$form_state) {
+  public function buildForm(array $form, FormStateInterface $form_state) {
 //    $fields = \Drupal::entityManager()->getFieldDefinitions('node', 'test_ct');
 //    var_dump($fields['field_my_image']->getType());
 //    var_dump($fields['field_my_image']->getType());
@@ -72,8 +73,8 @@ class SiteDumpExportForm extends FormBase {
   /**
    * {@inheritdoc}
    */
-  public function submitForm(array &$form, array &$form_state) {
-    $exportables = array_filter(array_values($form_state['values']['export_components']));
+  public function submitForm(array &$form, FormStateInterface $form_state) {
+    $exportables = array_filter(array_values($form_state->getValue('export_components')));
     if (count($exportables)) {
       $form_state['redirect_route'] = array(
         'route_name' => 'site_dump.export_download',
@@ -112,7 +113,7 @@ class SiteDumpExportForm extends FormBase {
    * @param array $form
    * @param array $form_state
    */
-  public function convertCSVtoYAML(array &$form, array &$form_state) {
+  public function convertCSVtoYAML(array &$form, FormStateInterface $form_state) {
     $files = glob(DRUPAL_ROOT . '/sites/default/files/site_dump/import/csv/*.csv');
     if (count($files)) {
       foreach ($files as $srcfile) {
